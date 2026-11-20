@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Embedding caches - recomputable, and large
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Derived datasets. Regenerate with data/load_squad.py; the engineered
+# sample corpus (data/sample_*.jsonl) IS committed, since the demo needs it.
+data/squad*.jsonl

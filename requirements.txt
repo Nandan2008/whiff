@@ -1,0 +1,6 @@
+numpy>=1.26
+scikit-learn>=1.4
+
+# Optional: real dense embeddings via `--embedder st:<model-name>`.
+# The default `hash` embedder needs neither a download nor a network.
+# sentence-transformers>=3.0
