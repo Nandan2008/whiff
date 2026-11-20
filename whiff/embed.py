@@ -27,6 +27,8 @@ class Embedder(Protocol):
     def id(self) -> str: ...
     @property
     def dim(self) -> int: ...
+    @property
+    def persist(self) -> bool: ...
     def encode(self, texts: Sequence[str]) -> np.ndarray: ...
 
 
@@ -67,6 +69,19 @@ class HashEmbedder:
     def dim(self) -> int:
         return self.n_features
 
+    @property
+    def persist(self) -> bool:
+        """Never worth writing to disk.
+
+        A cache earns its keep on (cost to recompute) / (bytes to store).
+        This embedder is the worst possible ratio: 2048 float32s is 8 KB per
+        vector, and producing one takes microseconds. Persisting a SQuAD-sized
+        run wrote a 352 MB file to save work that costs about a second to
+        redo. The in-memory layer still applies, which is where the real win
+        was anyway.
+        """
+        return False
+
     def encode(self, texts: Sequence[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
@@ -99,6 +114,15 @@ class SentenceTransformerEmbedder:
     def dim(self) -> int:
         return int(self._load().get_sentence_embedding_dimension())
 
+    @property
+    def persist(self) -> bool:
+        """Always worth writing to disk - the inverse of the hash embedder.
+
+        Vectors are smaller (384 floats, ~1.5 KB) and cost milliseconds each,
+        so a cached SQuAD run is ~8 MB and saves minutes of CPU.
+        """
+        return True
+
     def encode(self, texts: Sequence[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
@@ -111,15 +135,33 @@ _REGISTRY: dict[str, Embedder] = {}
 
 
 def get_embedder(spec: str) -> Embedder:
-    """`hash` or `st:<model-name>`. Instances are reused within a process."""
+    """`hash`, `hash:<n_features>`, or `st:<model-name>`.
+
+    The `hash:<n>` form exists so there are two genuinely different vector
+    spaces available offline, which makes hybrid retrieval testable without
+    downloading a model. It is also a real knob: fewer features means more
+    hash collisions and blurrier matching.
+
+    Instances are reused within a process.
+    """
     if spec in _REGISTRY:
         return _REGISTRY[spec]
     if spec == "hash":
         emb: Embedder = HashEmbedder()
+    elif spec.startswith("hash:"):
+        tail = spec[5:]
+        if not tail.isdigit() or int(tail) < 16:
+            raise ValueError(f"bad hash spec {spec!r}: want hash:<n>, n >= 16")
+        emb = HashEmbedder(n_features=int(tail))
     elif spec.startswith("st:"):
-        emb = SentenceTransformerEmbedder(spec[3:])
+        name = spec[3:]
+        if not name:
+            raise ValueError("st: needs a model name, e.g. st:all-MiniLM-L6-v2")
+        emb = SentenceTransformerEmbedder(name)
     else:
-        raise ValueError(f"unknown embedder: {spec!r} (want 'hash' or 'st:<model>')")
+        raise ValueError(
+            f"unknown embedder: {spec!r} "
+            f"(want 'hash', 'hash:<n>', or 'st:<model>')")
     _REGISTRY[spec] = emb
     return emb
 
@@ -180,7 +222,7 @@ class EmbeddingCache:
         h.update(text.encode("utf-8"))
         return h.hexdigest()
 
-    def _get_many(self, keys: list[str]) -> dict[str, np.ndarray]:
+    def _get_many(self, keys: list[str], persist: bool = True) -> dict[str, np.ndarray]:
         found: dict[str, np.ndarray] = {}
         missing = []
         for k in keys:
@@ -188,7 +230,7 @@ class EmbeddingCache:
                 found[k] = self._mem[k]
             else:
                 missing.append(k)
-        if self._con is not None and missing:
+        if persist and self._con is not None and missing:
             # Chunk the IN clause; SQLite caps variables per statement.
             for i in range(0, len(missing), 500):
                 batch = missing[i:i + 500]
@@ -203,10 +245,11 @@ class EmbeddingCache:
                     found[key] = vec
         return found
 
-    def _put_many(self, items: list[tuple[str, np.ndarray]]) -> None:
+    def _put_many(self, items: list[tuple[str, np.ndarray]],
+                  persist: bool = True) -> None:
         for key, vec in items:
             self._mem[key] = vec
-        if self._con is not None and items:
+        if persist and self._con is not None and items:
             self._con.executemany(
                 "INSERT OR REPLACE INTO vectors (key, dim, vec) VALUES (?,?,?)",
                 [(k, int(v.size), v.astype(np.float32).tobytes()) for k, v in items],
@@ -219,8 +262,12 @@ class EmbeddingCache:
         if not texts:
             return np.zeros((0, 1), dtype=np.float32)
 
+        # The embedder decides whether its vectors are worth disk. Cheap,
+        # high-dimensional vectors stay in memory only; expensive ones persist.
+        persist = getattr(embedder, "persist", True)
+
         keys = [self.key(embedder.id, t) for t in texts]
-        cached = self._get_many(keys)
+        cached = self._get_many(keys, persist=persist)
 
         # Deduplicate misses: the same string may appear twice in one call.
         todo_keys: list[str] = []
@@ -234,7 +281,7 @@ class EmbeddingCache:
 
         if todo_texts:
             fresh = embedder.encode(todo_texts)
-            self._put_many(list(zip(todo_keys, fresh)))
+            self._put_many(list(zip(todo_keys, fresh)), persist=persist)
             for k, v in zip(todo_keys, fresh):
                 cached[k] = v
 

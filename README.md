@@ -25,9 +25,9 @@ STAGE 3  minimal fix: chunk_size: 150 -> 300
          net queries gained: +0  (safe)
 ```
 
-> **Status: working.** All four stages run end to end, 76 tests pass, and the
-> tool has been run against SQuAD v1.1 dev with both a lexical and a dense
-> embedder — see *Finding* below.
+> **Status: working.** All four stages run end to end, 100 tests pass, and
+> the tool has been run against SQuAD v1.1 dev with lexical, dense and
+> hybrid retrieval — see *Finding* below.
 
 ## Why this exists
 
@@ -61,7 +61,24 @@ python -m whiff.cli bench             # measure the embedding cache speedup
 ```
 
 Point it at your own data with `--corpus` and `--queries` (JSONL; see
-`data/`). For real dense embeddings, `--embedder st:all-MiniLM-L6-v2`.
+`data/`). Embedder options:
+
+- `hash` (default) — lexical, offline, no download
+- `hash:<n>` — same, with a different number of hash features
+- `st:<model-name>` — dense, e.g. `st:all-MiniLM-L6-v2`
+
+Hybrid retrieval blends two of them:
+
+```bash
+python -m whiff.cli triage --embedder hash \
+  --hybrid-with st:all-MiniLM-L6-v2 --hybrid-weight 0.8
+```
+
+Scores from each retriever are min–max normalized per query *before*
+blending. That is not cosmetic: lexical cosines on a hashing vectorizer
+cluster near zero while dense cosines spread across most of [0, 1], so a raw
+weighted sum would be dominated by whichever retriever has the wider numeric
+range and `hybrid_weight` would not mean what it says.
 
 ## The three ideas worth knowing
 
@@ -100,6 +117,21 @@ queries:
 enormously with a real model: the `hash` embedder costs microseconds per
 text, a sentence-transformer costs milliseconds, so the cache's value scales
 directly with embedding cost.
+
+**Which is why persistence is the embedder's decision, not the cache's.** A
+cache earns its keep on (cost to recompute) / (bytes to store), and the two
+embedders sit at opposite extremes:
+
+| | vector size | cost to compute | persists? |
+|---|---|---|---|
+| `hash` | 2048 floats, ~8 KB | microseconds | **no** |
+| `st:all-MiniLM-L6-v2` | 384 floats, ~1.5 KB | milliseconds | **yes** |
+
+Persisting the cheap one wrote a **352 MB** SQLite file on a SQuAD-sized run
+to save about a second of recomputation. Now `Embedder.persist` gates the
+disk layer, the in-memory layer still applies to both — which is where the
+measured speedup came from anyway — and the same workload's cache footprint
+dropped from 388 MB to 8 MB.
 
 ### What the benchmark taught me
 
@@ -217,6 +249,74 @@ So the defensible claim is: **chunking failures and semantic failures are
 independent, and only the latter respond to a better embedder.** Quote the
 dense numbers, not the lexical ones, as the realistic picture.
 
+### Does it hold at a larger scale?
+
+Same study on the full slice — 2,067 paragraphs, 300 questions:
+
+| | 300 docs / 120 q | 2,067 docs / 300 q |
+|---|---|---|
+| failures | 62 of 120 | 177 of 300 |
+| fixable by one change | 31 (**50.0%**) | 89 (**50.3%**) |
+
+That the fixable fraction lands on 50% at both scales is the most reassuring
+number in the project — it suggests the measurement is picking up something
+structural rather than an artefact of one small sample.
+
+One honest wrinkle the larger run exposed: `span_fragmented` was 6 cases, and
+`overlap` fixed only 3 of them. On the small slice it fixed 3 of 3. So
+"overlap fixes fragmentation" is a tendency, not a law — if the answer spans
+more than the overlap width, it stays broken.
+
+### Does hybrid retrieval help? Only if you weight it so hard it stops being hybrid
+
+Hybrid search — blend a lexical and a dense retriever — is the standard
+prescription for vocabulary mismatch. The tool can test that directly by
+offering hybrid as a candidate fix:
+
+```bash
+python scripts/finding.py --corpus data/squad_small_corpus.jsonl \
+  --queries data/squad_small_queries.jsonl --limit 120 \
+  --hybrid-axis st:all-MiniLM-L6-v2 --hybrid-weight 0.8
+```
+
+The result depends almost entirely on the blend weight, which is not how
+hybrid search is usually discussed:
+
+| hybrid weight | recall@5 | failures it rescues |
+|---|---|---|
+| 0.0 (lexical only) | 48.3% | — |
+| 0.5 | 58.3% | **0** |
+| 0.8 | 74.2% | **17** |
+| 1.0 (dense only) | 75.0% | — |
+
+At **0.5, hybrid fixes nothing.** Not "a little" — zero of the 31 queries
+that chunking and `k` could not fix. It still raises aggregate recall by 12
+queries, but every one of those was *already* fixable by a cheaper change, so
+it adds nothing you couldn't get for free. Aggregate recall flattered it.
+
+At **0.8 it fixes 17**, taking fixable failures from 50.0% to **74.2%** and
+becoming the second-most-effective knob available. But recall at 0.8 is
+74.2% against 75.0% for dense alone — so by the time hybrid helps, you have
+essentially stopped blending and started using the dense retriever with a
+lexical tiebreaker.
+
+Where it helps is also not where you would guess:
+
+| Verdict | n | hybrid@0.8 fixes |
+|---|---|---|
+| `below_cutoff` (ranking) | 43 | **14** |
+| `absent_from_candidates` (vocabulary) | 16 | 3 |
+| `span_fragmented` (chunking) | 3 | **0** |
+
+Hybrid is sold as the fix for vocabulary mismatch, but here it fixed
+**ranking** failures four times more often. That makes sense once you see it:
+`absent_from_candidates` means the right chunk never reached the top 50, so
+blending has to drag it a long way, whereas `below_cutoff` queries sit at
+rank 6–50 already and only need a better ordering.
+
+And it fixes **zero** fragmentation failures — the same invariance as before.
+No retriever change rescues an answer the chunker already cut in half.
+
 ## Correctness notes
 
 - Chunk offsets satisfy `chunk.text == document[start:end]`. Localization
@@ -247,7 +347,7 @@ dense numbers, not the lexical ones, as the realistic picture.
 ## Tests
 
 ```bash
-python -m pytest -q      # 76 tests, ~5s, no network
+python -m pytest -q      # 100 tests, ~6s, no network
 ```
 
 The invariants worth knowing are pinned: chunk offsets equal their source
@@ -258,16 +358,26 @@ isolation, that the space really is ordered so the first hit is minimal, that
 the degenerate guard refuses and counts, and that a chunk-shrinking fix which
 breaks another query is reported as a regression.
 
+The hybrid path is pinned by its boundary cases: `hybrid_weight=0` must
+reproduce the primary retriever's ranking exactly, `1` must reproduce the
+secondary's, a retriever with flat scores must not dominate the blend, and
+`top_k` over a full score vector must agree with the optimized `search`. The
+`hash:<n>` embedder form exists partly so those tests run offline with two
+genuinely different vector spaces instead of a model download.
+
 ## What's left
 
 - **More of the dataset.** The runs above use 80–120 questions against
   300–2,067 paragraphs. Nothing blocks a larger slice except patience: the
   sweep is linear in configs × queries and the cache makes repeat runs free.
-- **A reranker axis.** The space is four knobs; a cross-encoder rerank
-  on/off would likely absorb a chunk of the `below_cutoff` bucket and is the
-  most obviously missing dimension.
-- **Hybrid lexical+dense weighting** as a fifth axis, which the two runs
-  above suggest would be the most informative one to add.
+- **A cross-encoder reranker axis.** Hybrid retrieval (now implemented)
+  absorbed 14 of the 43 `below_cutoff` failures; a true cross-encoder rerank
+  is the obvious next thing to try on the 8 that remain.
+- **A weight sweep as a first-class axis.** `hybrid_weight` currently sits
+  on the baseline rather than in the search space, because varying it *and*
+  `hybrid_with` together would count as two changed fields. The 0.5-vs-0.8
+  result shows the weight matters more than the feature, so it deserves
+  better treatment than a flag.
 - **A hand-written ANN index** behind `BruteForceIndex.search`, if you want
   to go deeper on algorithms than this project currently does.
 - Minor: `--max-docs` in the SQuAD loader keeps the first N paragraphs rather
@@ -288,7 +398,7 @@ whiff/cli.py             triage | explain | headroom | bench
 data/make_sample.py      regenerates the engineered sample corpus
 data/load_squad.py       SQuAD -> whiff JSONL
 scripts/finding.py       the single-change fix study
-tests/                   76 tests
+tests/                   100 tests
 ```
 
 ## License

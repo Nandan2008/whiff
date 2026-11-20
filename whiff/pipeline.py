@@ -28,6 +28,16 @@ from .index import BruteForceIndex
 _WS = re.compile(r"\s+")
 
 
+def _minmax(scores: np.ndarray) -> np.ndarray:
+    """Scale to [0, 1]. A flat score vector maps to all zeros."""
+    if scores.size == 0:
+        return scores
+    lo, hi = float(scores.min()), float(scores.max())
+    if hi <= lo:
+        return np.zeros_like(scores)
+    return (scores - lo) / (hi - lo)
+
+
 def normalize(text: str) -> str:
     return _WS.sub(" ", text).strip().lower()
 
@@ -95,13 +105,15 @@ class Retrieved:
 class Retriever:
     def __init__(self, cfg: RetrievalConfig, chunks: list[Chunk],
                  index: BruteForceIndex, embedder: Embedder,
-                 cache: EmbeddingCache, corpus: "Corpus"):
+                 cache: EmbeddingCache, corpus: "Corpus",
+                 secondary: tuple[Embedder, BruteForceIndex] | None = None):
         self.cfg = cfg
         self.chunks = chunks
         self.index = index
         self.embedder = embedder
         self.cache = cache
         self.corpus = corpus
+        self.secondary = secondary
         self._qcache: dict[str, np.ndarray] = {}
 
     def index_docs(self) -> set[str]:
@@ -118,9 +130,30 @@ class Retriever:
 
     def candidates(self, text: str) -> list[Retrieved]:
         """First-stage pool. Models what an ANN index would hand a reranker."""
-        hits = self.index.search(self._query_vec(text), self.cfg.candidate_k)
+        if self.secondary is None:
+            hits = self.index.search(self._query_vec(text), self.cfg.candidate_k)
+        else:
+            hits = BruteForceIndex.top_k(self._blended_scores(text),
+                                         self.cfg.candidate_k)
         return [Retrieved(i + 1, self.chunks[row], score)
                 for i, (row, score) in enumerate(hits)]
+
+    def _blended_scores(self, text: str) -> np.ndarray:
+        """Min-max normalize each retriever's scores, then blend.
+
+        Normalizing per query is not optional. Lexical cosines on a hashing
+        vectorizer cluster near zero while dense cosines spread across most of
+        [0, 1], so a raw weighted sum is dominated by whichever embedder
+        happens to have the larger numeric range - the weight would not mean
+        what it says. Normalizing first makes `hybrid_weight` an actual
+        mixing fraction.
+        """
+        emb2, index2 = self.secondary
+        s1 = _minmax(self.index.scores(self._query_vec(text)))
+        q2 = self.cache.encode(emb2, [text])[0]
+        s2 = _minmax(index2.scores(q2))
+        w = float(self.cfg.hybrid_weight)
+        return (1.0 - w) * s1 + w * s2
 
     def final(self, text: str) -> list[Retrieved]:
         return self.candidates(text)[: self.cfg.k]
@@ -159,7 +192,7 @@ class IndexStore:
     def __init__(self, corpus: Corpus, cache: EmbeddingCache):
         self.corpus = corpus
         self.cache = cache
-        self._built: dict[tuple, tuple[list[Chunk], BruteForceIndex, Embedder]] = {}
+        self._built: dict[tuple, tuple] = {}
         self.builds = 0
 
     def get(self, cfg: RetrievalConfig) -> Retriever:
@@ -168,11 +201,22 @@ class IndexStore:
             self.builds += 1
             embedder = get_embedder(cfg.embedder)
             chunks = chunk_corpus(self.corpus.docs, cfg)
-            vecs = self.cache.encode(embedder, [c.text for c in chunks])
-            self._built[key] = (chunks, BruteForceIndex(vecs, [c.id for c in chunks]),
-                                embedder)
-        chunks, index, embedder = self._built[key]
-        return Retriever(cfg, chunks, index, embedder, self.cache, self.corpus)
+            texts = [c.text for c in chunks]
+            vecs = self.cache.encode(embedder, texts)
+            index = BruteForceIndex(vecs, [c.id for c in chunks])
+
+            secondary = None
+            if cfg.hybrid_with:
+                # Same chunk set, second vector space - only the vectors are
+                # extra work, and the embedding cache covers those too.
+                emb2 = get_embedder(cfg.hybrid_with)
+                vecs2 = self.cache.encode(emb2, texts)
+                secondary = (emb2, BruteForceIndex(vecs2, [c.id for c in chunks]))
+
+            self._built[key] = (chunks, index, embedder, secondary)
+        chunks, index, embedder, secondary = self._built[key]
+        return Retriever(cfg, chunks, index, embedder, self.cache, self.corpus,
+                         secondary)
 
 
 def build(corpus: Corpus, cfg: RetrievalConfig,

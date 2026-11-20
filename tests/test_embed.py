@@ -35,9 +35,22 @@ def test_embedder_is_deterministic(emb: HashEmbedder) -> None:
     assert np.allclose(a, b)
 
 
-def test_unknown_embedder_spec_is_rejected() -> None:
+@pytest.mark.parametrize("spec", ["gpt-9", "hash:", "hash:abc", "hash:4", "st:"])
+def test_bad_embedder_specs_are_rejected(spec: str) -> None:
     with pytest.raises(ValueError):
-        get_embedder("gpt-9")
+        get_embedder(spec)
+
+
+def test_hash_spec_sets_dimensionality() -> None:
+    assert get_embedder("hash:512").dim == 512
+    assert get_embedder("hash").dim == 2048
+
+
+def test_hash_specs_are_different_vector_spaces() -> None:
+    """What makes offline hybrid testing possible."""
+    a, b = get_embedder("hash:512"), get_embedder("hash:1024")
+    assert a.id != b.id
+    assert a.encode(["alpha beta"]).shape[1] != b.encode(["alpha beta"]).shape[1]
 
 
 def test_first_call_is_all_misses(cache: EmbeddingCache, emb) -> None:
@@ -82,7 +95,21 @@ def test_different_embedders_do_not_share_entries(cache) -> None:
     assert cache.stats.misses == 1, "embedder id must be part of the cache key"
 
 
-def test_cache_persists_across_instances(tmp_path, emb) -> None:
+class PersistingHash(HashEmbedder):
+    """Stands in for an expensive embedder (a sentence-transformer) so the
+    persistence path is testable without a model download."""
+
+    @property
+    def id(self) -> str:
+        return "persisting-" + super().id
+
+    @property
+    def persist(self) -> bool:
+        return True
+
+
+def test_cache_persists_across_instances(tmp_path) -> None:
+    emb = PersistingHash(n_features=256)
     path = tmp_path / "vecs.sqlite"
     first = EmbeddingCache(path)
     first.encode(emb, ["persisted"])
@@ -92,6 +119,44 @@ def test_cache_persists_across_instances(tmp_path, emb) -> None:
     second.encode(emb, ["persisted"])
     assert (second.stats.hits, second.stats.misses) == (1, 0)
     second.close()
+
+
+def test_hash_embedder_does_not_touch_disk(tmp_path, emb) -> None:
+    """The policy: cheap, high-dimensional vectors stay in memory.
+
+    Persisting them wrote a 352 MB file on a SQuAD-sized run to save work
+    that costs about a second to redo.
+    """
+    assert emb.persist is False
+    path = tmp_path / "vecs.sqlite"
+    cache = EmbeddingCache(path)
+    cache.encode(emb, ["one", "two", "three"])
+    cache.close()
+
+    reopened = EmbeddingCache(path)
+    reopened.encode(emb, ["one", "two", "three"])
+    assert reopened.stats.misses == 3, "nothing should have been persisted"
+    reopened.close()
+
+
+def test_in_memory_reuse_still_works_for_non_persisted(cache, emb) -> None:
+    """Skipping disk must not disable the layer that actually won the speedup."""
+    cache.encode(emb, ["repeated"])
+    cache.reset_stats()
+    cache.encode(emb, ["repeated"])
+    assert (cache.stats.hits, cache.stats.misses) == (1, 0)
+
+
+def test_persisting_embedder_has_a_distinct_cache_namespace(tmp_path) -> None:
+    """Same text, different embedder id, must not collide."""
+    cheap = HashEmbedder(n_features=256)
+    pricey = PersistingHash(n_features=256)
+    cache = EmbeddingCache(tmp_path / "v.sqlite")
+    cache.encode(cheap, ["shared text"])
+    cache.reset_stats()
+    cache.encode(pricey, ["shared text"])
+    assert cache.stats.misses == 1
+    cache.close()
 
 
 def test_hit_rate_of_empty_cache_is_zero(cache) -> None:

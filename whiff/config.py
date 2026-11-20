@@ -26,7 +26,8 @@ from typing import Iterator
 
 # Fields whose change invalidates stored vectors, because they change the
 # chunk text itself or the model that encodes it.
-REEMBED_FIELDS = frozenset({"chunker", "chunk_size", "overlap", "embedder"})
+REEMBED_FIELDS = frozenset({"chunker", "chunk_size", "overlap", "embedder",
+                            "hybrid_with"})
 
 
 @dataclass(frozen=True, order=True)
@@ -38,6 +39,11 @@ class RetrievalConfig:
     k: int = 5                        # final result count
     candidate_k: int = 50             # first-stage candidate pool
     context_budget: int | None = None  # chars of context; None = no packing
+    # Hybrid retrieval: score with a second embedder and blend. The standard
+    # answer to vocabulary mismatch, where a lexical retriever misses a
+    # paraphrase and a dense one misses an exact rare term.
+    hybrid_with: str | None = None     # second embedder spec, or None
+    hybrid_weight: float = 0.5         # weight on the SECOND embedder
 
     def changed_fields(self, other: "RetrievalConfig") -> tuple[str, ...]:
         return tuple(
@@ -55,15 +61,24 @@ class RetrievalConfig:
         return (n, cost)
 
     def index_key(self) -> tuple:
-        """Identity of the built index - fields that change the chunk set."""
-        return (self.chunker, self.chunk_size, self.overlap, self.embedder)
+        """Identity of the built index - fields that change the chunk set.
+
+        `hybrid_with` is coerced to "" rather than left as None so the tuple
+        stays sortable: a space containing both None and a model name would
+        otherwise raise TypeError when enumerate_space sorts on this.
+        """
+        return (self.chunker, self.chunk_size, self.overlap, self.embedder,
+                self.hybrid_with or "")
 
     def with_(self, **kw) -> "RetrievalConfig":
         return replace(self, **kw)
 
     def describe(self) -> str:
-        return (f"{self.chunker}/{self.chunk_size}+{self.overlap} "
+        base = (f"{self.chunker}/{self.chunk_size}+{self.overlap} "
                 f"{self.embedder} k={self.k}")
+        if self.hybrid_with:
+            base += f" +{self.hybrid_with}@{self.hybrid_weight:g}"
+        return base
 
 
 # The v1 search space. Deliberately four axes, not eight: a space you can

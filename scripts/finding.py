@@ -53,17 +53,32 @@ def main() -> int:
                     help="restrict the space to chunking knobs (no k)")
     ap.add_argument("--embedder", default="hash",
                     help="hash (lexical, offline) or st:<model-name> (dense)")
+    ap.add_argument("--hybrid-axis", default=None, metavar="SPEC",
+                    help="add hybrid retrieval as a candidate FIX, e.g. "
+                         "st:all-MiniLM-L6-v2. Tests whether blending a "
+                         "second retriever rescues failures that chunking "
+                         "and k cannot.")
+    ap.add_argument("--hybrid-weight", type=float, default=0.5,
+                    help="weight on the second retriever when --hybrid-axis "
+                         "is used. Set on the baseline, where it is inert "
+                         "until hybrid_with is switched on, so turning hybrid "
+                         "on still counts as a single changed field.")
     args = ap.parse_args()
 
     corpus = Corpus.from_jsonl(args.corpus)
     queries = load_queries(args.queries)[: args.limit]
     cache = EmbeddingCache(args.cache)
     store = IndexStore(corpus, cache)
-    space = CHUNKING_SPACE if args.chunking_only else FULL_SPACE
+    space = dict(CHUNKING_SPACE if args.chunking_only else FULL_SPACE)
+    if args.hybrid_axis:
+        # None first so the ordering still prefers a cheaper non-hybrid fix
+        # when one exists; hybrid only wins when nothing else works.
+        space["hybrid_with"] = [None, args.hybrid_axis]
 
     base = RetrievalConfig(chunk_size=args.chunk_size, k=args.k,
                            candidate_k=args.candidate_k,
-                           embedder=args.embedder)
+                           embedder=args.embedder,
+                           hybrid_weight=args.hybrid_weight)
 
     get_embedder(base.embedder).encode(["warmup"])   # keep timing honest
 

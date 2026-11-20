@@ -25,6 +25,24 @@ class BruteForceIndex:
     def __len__(self) -> int:
         return len(self.ids)
 
+    def scores(self, query: np.ndarray) -> np.ndarray:
+        """Similarity against every row. Needed for hybrid blending, which
+        has to combine full score vectors before taking a top-k."""
+        if len(self) == 0:
+            return np.zeros(0, dtype=np.float32)
+        q = np.asarray(query, dtype=np.float32).reshape(-1)
+        return self.vectors @ q
+
+    @staticmethod
+    def top_k(scores: np.ndarray, k: int) -> list[tuple[int, float]]:
+        """Top-k of an arbitrary score vector, best first."""
+        if scores.size == 0 or k <= 0:
+            return []
+        k = min(k, scores.shape[0])
+        top = np.argpartition(-scores, k - 1)[:k]
+        top = top[np.argsort(-scores[top], kind="stable")]
+        return [(int(i), float(scores[i])) for i in top]
+
     def search(self, query: np.ndarray, k: int) -> list[tuple[int, float]]:
         """Top-k by cosine similarity, as (row_index, score), best first.
 

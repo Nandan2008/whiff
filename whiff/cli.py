@@ -42,6 +42,11 @@ def add_common(ap: argparse.ArgumentParser) -> None:
                     help="final result count")
     ap.add_argument("--candidate-k", type=int, default=20)
     ap.add_argument("--context-budget", type=int, default=None)
+    ap.add_argument("--hybrid-with", default=None,
+                    help="blend a second embedder's scores, e.g. "
+                         "st:all-MiniLM-L6-v2")
+    ap.add_argument("--hybrid-weight", type=float, default=0.5,
+                    help="weight on the second embedder (0..1)")
     ap.add_argument("--max-changed", type=int, default=2,
                     help="largest number of fields a proposed fix may touch")
 
@@ -51,6 +56,7 @@ def baseline_from(args) -> RetrievalConfig:
         chunker=args.chunker, chunk_size=args.chunk_size, overlap=args.overlap,
         embedder=args.embedder, k=args.k, candidate_k=args.candidate_k,
         context_budget=args.context_budget,
+        hybrid_with=args.hybrid_with, hybrid_weight=args.hybrid_weight,
     )
 
 
