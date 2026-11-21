@@ -25,7 +25,7 @@ STAGE 3  minimal fix: chunk_size: 150 -> 300
          net queries gained: +0  (safe)
 ```
 
-> **Status: working.** All four stages run end to end, 121 tests pass, and
+> **Status: working.** All four stages run end to end, 142 tests pass, and
 > the tool has been run against SQuAD v1.1 dev with lexical, dense and
 > hybrid retrieval — see *Finding* below.
 
@@ -71,6 +71,18 @@ cutoff drawn as a hard line, and the expected document's marker wherever it
 actually landed. "Ranked 8, cutoff is 5" is the whole diagnosis in one
 glance, and it is why the page exists rather than being a prettier wrapper
 around the CLI output.
+
+**Your own documents.** Drag `.txt`, `.md` or `.jsonl` files onto the sidebar
+(or use the button). Filenames become document ids; a `.jsonl` file is read as
+one `{"id", "text"}` record per line. Malformed lines are reported with line
+numbers rather than silently dropped.
+
+**Asking anything.** The box at the top runs a free-text question and shows
+what comes back, with the cutoff drawn across the results. It gives no
+verdict, deliberately: nobody has said which document is correct, so a green
+tick would be a lie. Verdicts need a question paired with its expected
+document, which is what the sample queries file provides and what uploaded
+documents do not have.
 
 It is standard library only - `http.server` and one page of HTML, CSS and
 JavaScript with no framework and no build step. A tool whose pitch is "runs
@@ -364,7 +376,7 @@ No retriever change rescues an answer the chunker already cut in half.
 ## Tests
 
 ```bash
-python -m pytest -q      # 121 tests, ~5s, no network
+python -m pytest -q      # 142 tests, ~4s, no network
 ```
 
 The invariants worth knowing are pinned: chunk offsets equal their source
@@ -417,7 +429,7 @@ whiff/static/            index.html, app.css, app.js
 data/make_sample.py      regenerates the engineered sample corpus
 data/load_squad.py       SQuAD -> whiff JSONL
 scripts/finding.py       the single-change fix study
-tests/                   121 tests
+tests/                   142 tests
 ```
 
 ## License

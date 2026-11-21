@@ -36,13 +36,29 @@
 </header>
 
 <main>
-  <aside class="queries" aria-label="Queries">
+  <aside class="queries" aria-label="Documents and questions">
+    <div class="upload" id="drop">
+      <input type="file" id="files" multiple hidden
+             accept=".txt,.md,.markdown,.text,.jsonl">
+      <button type="button" id="pick">Upload your documents</button>
+      <p class="src" id="src">Using the sample warehouse documents.</p>
+    </div>
+
     <div class="tally" id="tally">Loading…</div>
     <ul id="query-list"></ul>
   </aside>
 
-  <section class="detail" id="detail" aria-live="polite">
-    <p class="placeholder">Pick a query to see why it failed.</p>
+  <section class="right">
+    <form class="ask" id="ask">
+      <input id="q" type="search" autocomplete="off"
+             placeholder="Ask a question about these documents…"
+             aria-label="Ask a question">
+      <button type="submit">Search</button>
+    </form>
+
+    <div class="detail" id="detail" aria-live="polite">
+      <p class="placeholder">Pick a question on the left, or type your own above.</p>
+    </div>
   </section>
 </main>
 

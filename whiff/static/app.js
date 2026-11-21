@@ -5,6 +5,12 @@ const listEl = document.getElementById("query-list");
 const tallyEl = document.getElementById("tally");
 const detailEl = document.getElementById("detail");
 const resetBtn = document.getElementById("reset");
+const dropEl = document.getElementById("drop");
+const filesEl = document.getElementById("files");
+const pickEl = document.getElementById("pick");
+const srcEl = document.getElementById("src");
+const askForm = document.getElementById("ask");
+const qEl = document.getElementById("q");
 
 const DEFAULTS = { chunker: "fixed", chunk_size: "150", overlap: "0", k: "5" };
 
@@ -40,9 +46,22 @@ async function loadOverview() {
   }
 
   const s = data.summary;
-  tallyEl.innerHTML =
-    `<b>${s.n_retrieved} of ${s.n_queries}</b> found &middot; ` +
-    `${data.corpus.chunks} chunks`;
+  const c = data.corpus;
+
+  srcEl.innerHTML = c.source === "uploaded"
+    ? `Your documents: <b>${c.docs}</b> loaded.`
+    : "Using the sample warehouse documents.";
+
+  tallyEl.innerHTML = data.has_queries
+    ? `<b>${s.n_retrieved} of ${s.n_queries}</b> found &middot; ${c.chunks} chunks`
+    : `<b>${c.docs}</b> documents &middot; ${c.chunks} chunks`;
+
+  if (!data.has_queries) {
+    listEl.innerHTML = `<li class="empty">No test questions for these
+      documents, so there is nothing to mark right or wrong. Ask a question
+      above and see what comes back.</li>`;
+    return;
+  }
 
   listEl.innerHTML = data.queries.map((q) => `
     <li>
@@ -203,7 +222,124 @@ function render(d) {
   return out.join("");
 }
 
+/* --------------------------------------------------------------- search */
+
+/* A free-text question has no known right answer, so this deliberately
+   shows the ranking and nothing else - no verdict, no green tick. */
+async function doSearch(question) {
+  if (!question.trim()) return;
+  selected = null;
+  listEl.querySelectorAll(".qbtn").forEach((b) =>
+    b.setAttribute("aria-current", "false"));
+
+  detailEl.innerHTML = `<div class="panel"><p class="blame">Searching…</p></div>`;
+  const d = await get("/api/search", `&q=${encodeURIComponent(question)}`);
+  if (d.error) {
+    detailEl.innerHTML = `<div class="error">${esc(d.error)}</div>`;
+    return;
+  }
+
+  if (!d.results.length) {
+    detailEl.innerHTML = `<div class="panel">
+      <p class="question">${esc(d.question)}</p>
+      <p class="blame">Nothing came back. The documents may be empty.</p>
+    </div>`;
+    return;
+  }
+
+  detailEl.innerHTML = `<div class="panel">
+    <p class="question">${esc(d.question)}</p>
+    <p class="expected">No expected answer was given for this question, so
+      there is no verdict — this is simply what the retriever returned.
+      Everything above the line would be sent to the model.</p>
+    <table>
+      <thead><tr>
+        <th class="num">#</th><th class="num">score</th>
+        <th>chunk</th><th>text</th>
+      </tr></thead>
+      <tbody>${d.results.map((r, i) => `
+        ${i === d.cutoff ? `<tr class="cut"><td colspan="4">cutoff k=${
+          d.cutoff} — everything below is discarded</td></tr>` : ""}
+        <tr class="${r.inside_cutoff ? "" : "out"}">
+          <td class="num">${r.rank}</td>
+          <td class="num">${r.score.toFixed(3)}</td>
+          <td class="chunk">${esc(r.chunk_id)}</td>
+          <td class="snippet">${esc(r.text)}</td>
+        </tr>`).join("")}</tbody>
+    </table>
+  </div>`;
+}
+
+/* --------------------------------------------------------------- upload */
+
+function readFile(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({ name: file.name, text: reader.result });
+    reader.onerror = () => resolve({ name: file.name, text: "" });
+    reader.readAsText(file);
+  });
+}
+
+async function upload(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+
+  srcEl.textContent = `Reading ${files.length} file${files.length > 1 ? "s" : ""}…`;
+  const payload = { files: await Promise.all(files.map(readFile)) };
+
+  let res, data;
+  try {
+    res = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    data = await res.json();
+  } catch {
+    srcEl.textContent = "Upload failed — is the server still running?";
+    return;
+  }
+
+  if (!res.ok || data.error) {
+    srcEl.innerHTML = `<span class="warn">${esc(data.error || "Upload failed")}</span>`;
+    return;
+  }
+
+  selected = null;
+  detailEl.innerHTML = `<p class="placeholder">Ask a question above to see
+    what these documents return.</p>`;
+  qEl.focus();
+  await loadOverview();
+
+  if (data.problems && data.problems.length) {
+    srcEl.innerHTML += ` <span class="warn">${data.problems.length} file(s)
+      skipped.</span>`;
+  }
+}
+
 /* ---------------------------------------------------------------- events */
+
+pickEl.addEventListener("click", () => filesEl.click());
+filesEl.addEventListener("change", () => upload(filesEl.files));
+
+["dragenter", "dragover"].forEach((e) =>
+  dropEl.addEventListener(e, (ev) => {
+    ev.preventDefault();
+    dropEl.classList.add("over");
+  }));
+["dragleave", "drop"].forEach((e) =>
+  dropEl.addEventListener(e, (ev) => {
+    ev.preventDefault();
+    dropEl.classList.remove("over");
+  }));
+dropEl.addEventListener("drop", (ev) => upload(ev.dataTransfer.files));
+
+askForm.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  doSearch(qEl.value);
+});
+
 
 form.addEventListener("input", () => {
   clearTimeout(timer);

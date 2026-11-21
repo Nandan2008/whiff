@@ -73,7 +73,7 @@ def config_dict(cfg: RetrievalConfig) -> dict:
 # --------------------------------------------------------------------------
 
 def overview_payload(store: IndexStore, cfg: RetrievalConfig,
-                     queries: list[Query]) -> dict:
+                     queries: list[Query], source: str = "sample") -> dict:
     retr = store.get(cfg)
     results = triage_all(retr, queries)
     rows = []
@@ -90,9 +90,12 @@ def overview_payload(store: IndexStore, cfg: RetrievalConfig,
     s = summarize(results)
     return {
         "config": config_dict(cfg),
-        "corpus": {"docs": len(retr.corpus.docs), "chunks": len(retr.chunks)},
+        "corpus": {"docs": len(retr.corpus.docs), "chunks": len(retr.chunks),
+                   "source": source,
+                   "names": sorted(retr.corpus.docs)[:40]},
         "summary": s,
         "queries": rows,
+        "has_queries": bool(rows),
     }
 
 
@@ -184,6 +187,9 @@ def explain_payload(store: IndexStore, cfg: RetrievalConfig,
 # server
 # --------------------------------------------------------------------------
 
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+
+
 class _State:
     """Holds the corpus, queries and index store behind one lock.
 
@@ -197,7 +203,101 @@ class _State:
         self.queries = load_queries(queries_path)
         self.cache = EmbeddingCache(None)   # memory only; nothing to persist
         self.store = IndexStore(self.corpus, self.cache)
+        self.source = "sample"
         self.lock = threading.Lock()
+
+    def replace_corpus(self, docs: dict[str, str]) -> None:
+        """Swap in uploaded documents.
+
+        The queries are dropped, not kept: they name documents that no longer
+        exist, and a verdict needs a known right answer. Uploaded documents
+        have none, so the page falls back to asking questions and showing
+        what comes back, without pretending to judge it.
+        """
+        self.corpus = Corpus(docs)
+        self.queries = []
+        self.cache = EmbeddingCache(None)
+        self.store = IndexStore(self.corpus, self.cache)
+        self.source = "uploaded"
+
+
+def docs_from_uploads(files: list[dict]) -> tuple[dict[str, str], list[str]]:
+    """Turn uploaded files into {doc_id: text}, plus a list of complaints.
+
+    A .jsonl file is read as one {"id", "text"} object per line; anything
+    else is treated as a whole document named after the file.
+    """
+    docs: dict[str, str] = {}
+    problems: list[str] = []
+
+    for f in files:
+        name = str(f.get("name", "")).strip() or "untitled"
+        text = f.get("text", "")
+        if not isinstance(text, str) or not text.strip():
+            problems.append(f"{name}: empty")
+            continue
+
+        if name.lower().endswith(".jsonl"):
+            kept = 0
+            for n, line in enumerate(text.splitlines(), 1):
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                    doc_id, body = str(rec["id"]), str(rec["text"])
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    problems.append(f"{name} line {n}: not {{id, text}}")
+                    continue
+                if body.strip():
+                    docs[doc_id] = body
+                    kept += 1
+            if not kept:
+                problems.append(f"{name}: no usable lines")
+            continue
+
+        stem = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        for ext in (".txt", ".md", ".markdown", ".text"):
+            if stem.lower().endswith(ext):
+                stem = stem[: -len(ext)]
+                break
+        doc_id = stem or name
+        suffix = 2
+        while doc_id in docs:                      # two files, same name
+            doc_id = f"{stem}-{suffix}"
+            suffix += 1
+        docs[doc_id] = text
+
+    return docs, problems
+
+
+def search_payload(store: IndexStore, cfg: RetrievalConfig,
+                   question: str) -> dict:
+    """What comes back for an arbitrary question.
+
+    No verdict: nobody has said which document is correct, so the honest
+    output is the ranking itself rather than a green tick.
+    """
+    question = (question or "").strip()
+    if not question:
+        return {"question": "", "results": []}
+
+    retr = store.get(cfg)
+    results = []
+    for r in retr.candidates(question)[: max(cfg.k, 8)]:
+        results.append({
+            "rank": r.rank,
+            "score": round(r.score, 4),
+            "chunk_id": r.chunk.id,
+            "doc_id": r.chunk.doc_id,
+            "inside_cutoff": r.rank <= cfg.k,
+            "text": " ".join(r.chunk.text.split())[:400],
+        })
+    return {
+        "question": question,
+        "config": config_dict(cfg),
+        "cutoff": cfg.k,
+        "results": results,
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -253,7 +353,12 @@ class Handler(BaseHTTPRequestHandler):
                 with self.state.lock:
                     if route == "/api/overview":
                         return self._json(overview_payload(
-                            self.state.store, cfg, self.state.queries))
+                            self.state.store, cfg, self.state.queries,
+                            self.state.source))
+                    if route == "/api/search":
+                        return self._json(search_payload(
+                            self.state.store, cfg,
+                            params.get("q", [""])[0]))
                     if route == "/api/explain":
                         qid = params.get("id", [""])[0]
                         maxc = int(params.get("max_changed", ["2"])[0])
@@ -266,6 +371,42 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "unknown endpoint"}, code=404)
 
         self._send(404, b"not found", "text/plain; charset=utf-8")
+
+    def do_POST(self) -> None:
+        if urlparse(self.path).path != "/api/upload":
+            return self._json({"error": "unknown endpoint"}, code=404)
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return self._json({"error": "empty upload"}, code=400)
+        if length > MAX_UPLOAD_BYTES:
+            return self._json(
+                {"error": f"too large: {length} bytes, limit is "
+                          f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB"}, code=413)
+
+        try:
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            files = body.get("files") or []
+            if not isinstance(files, list):
+                raise ValueError("files must be a list")
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            return self._json({"error": f"bad request: {exc}"}, code=400)
+
+        docs, problems = docs_from_uploads(files)
+        if not docs:
+            return self._json(
+                {"error": "no readable documents",
+                 "problems": problems or ["nothing usable in those files"]},
+                code=400)
+
+        with self.state.lock:
+            self.state.replace_corpus(docs)
+
+        return self._json({"ok": True, "documents": len(docs),
+                           "names": sorted(docs)[:40], "problems": problems})
 
 
 def serve(corpus_path: Path | str, queries_path: Path | str,
