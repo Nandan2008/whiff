@@ -25,7 +25,7 @@ STAGE 3  minimal fix: chunk_size: 150 -> 300
          net queries gained: +0  (safe)
 ```
 
-> **Status: working.** All four stages run end to end, 142 tests pass, and
+> **Status: working.** All four stages run end to end, 150 tests pass, and
 > the tool has been run against SQuAD v1.1 dev with lexical, dense and
 > hybrid retrieval — see *Finding* below.
 
@@ -72,10 +72,16 @@ actually landed. "Ranked 8, cutoff is 5" is the whole diagnosis in one
 glance, and it is why the page exists rather than being a prettier wrapper
 around the CLI output.
 
-**Your own documents.** Drag `.txt`, `.md` or `.jsonl` files onto the sidebar
-(or use the button). Filenames become document ids; a `.jsonl` file is read as
-one `{"id", "text"}` record per line. Malformed lines are reported with line
-numbers rather than silently dropped.
+**Your own documents.** Drag `.pdf`, `.docx`, `.txt`, `.md` or `.jsonl` files
+onto the sidebar, or use the button. Filenames become document ids; a `.jsonl`
+file is read as one `{"id", "text"}` record per line.
+
+PDFs and Word files are sent as base64 and their text extracted server-side
+(`pypdf`, `python-docx`; Word tables included, since policy documents put the
+actual numbers in tables). Nothing is guessed at: a scanned PDF has no text
+layer, so it is reported as "no text found" rather than loaded as an empty
+document, and a corrupt file becomes a complaint rather than a stack trace.
+Malformed `.jsonl` lines are reported with line numbers.
 
 **Asking anything.** The box at the top runs a free-text question and shows
 what comes back, with the cutoff drawn across the results. It gives no
@@ -376,7 +382,7 @@ No retriever change rescues an answer the chunker already cut in half.
 ## Tests
 
 ```bash
-python -m pytest -q      # 142 tests, ~4s, no network
+python -m pytest -q      # 150 tests, ~4s, no network
 ```
 
 The invariants worth knowing are pinned: chunk offsets equal their source
@@ -429,7 +435,7 @@ whiff/static/            index.html, app.css, app.js
 data/make_sample.py      regenerates the engineered sample corpus
 data/load_squad.py       SQuAD -> whiff JSONL
 scripts/finding.py       the single-change fix study
-tests/                   142 tests
+tests/                   150 tests
 ```
 
 ## License

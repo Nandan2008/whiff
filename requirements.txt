@@ -4,3 +4,8 @@ scikit-learn>=1.4
 # Optional: real dense embeddings via `--embedder st:<model-name>`.
 # The default `hash` embedder needs neither a download nor a network.
 # sentence-transformers>=3.0
+
+# Optional: only needed to upload PDF or Word documents in the web interface.
+# Plain text and markdown work without them.
+# pypdf>=5.0
+# python-docx>=1.1

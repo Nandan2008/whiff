@@ -272,12 +272,26 @@ async function doSearch(question) {
 
 /* --------------------------------------------------------------- upload */
 
+const BINARY = /\.(pdf|docx)$/i;
+
+/* PDFs and Word files cannot be read as text in the browser, so they go up
+   as base64 and the server extracts their text. Everything else is read as
+   text directly, which keeps the common case cheap. */
 function readFile(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, text: reader.result });
+    const binary = BINARY.test(file.name);
+
     reader.onerror = () => resolve({ name: file.name, text: "" });
-    reader.readAsText(file);
+    reader.onload = () => {
+      if (!binary) return resolve({ name: file.name, text: reader.result });
+      // readAsDataURL gives "data:<type>;base64,<payload>"
+      const comma = String(reader.result).indexOf(",");
+      resolve({ name: file.name, b64: String(reader.result).slice(comma + 1) });
+    };
+
+    if (binary) reader.readAsDataURL(file);
+    else reader.readAsText(file);
   });
 }
 

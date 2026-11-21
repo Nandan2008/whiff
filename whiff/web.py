@@ -187,7 +187,9 @@ def explain_payload(store: IndexStore, cfg: RetrievalConfig,
 # server
 # --------------------------------------------------------------------------
 
-MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+# Binary files travel as base64, which inflates them by about a third, so
+# this ceiling is on the encoded request rather than on the files themselves.
+MAX_UPLOAD_BYTES = 24 * 1024 * 1024
 
 
 class _State:
@@ -221,18 +223,95 @@ class _State:
         self.source = "uploaded"
 
 
+TEXT_EXTENSIONS = (".txt", ".md", ".markdown", ".text")
+BINARY_EXTENSIONS = (".pdf", ".docx")
+
+
+def extract_pdf(data: bytes) -> str:
+    """Text from a PDF, page by page.
+
+    Scanned PDFs are images with no text layer and come back empty; that is
+    reported as an empty file rather than guessed at, because OCR is a much
+    bigger promise than this tool should make quietly.
+    """
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    reader = PdfReader(BytesIO(data))
+    pages = []
+    for page in reader.pages:
+        try:
+            pages.append(page.extract_text() or "")
+        except Exception:                       # one bad page, not the file
+            continue
+    return "\n\n".join(p for p in pages if p.strip())
+
+
+def extract_docx(data: bytes) -> str:
+    from io import BytesIO
+
+    import docx
+
+    document = docx.Document(BytesIO(data))
+    parts = [p.text for p in document.paragraphs if p.text.strip()]
+    for table in document.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n\n".join(parts)
+
+
+def _decode_binary(name: str, b64: str) -> tuple[str, str | None]:
+    """Return (text, problem). Never raises: a corrupt file is a complaint."""
+    import base64
+
+    lower = name.lower()
+    try:
+        raw = base64.b64decode(b64, validate=False)
+    except Exception as exc:
+        return "", f"{name}: could not decode ({type(exc).__name__})"
+
+    try:
+        if lower.endswith(".pdf"):
+            text = extract_pdf(raw)
+            if not text.strip():
+                return "", (f"{name}: no text found - if it is a scan, the "
+                            f"page images have no text layer to read")
+            return text, None
+        if lower.endswith(".docx"):
+            return extract_docx(raw), None
+    except ImportError as exc:
+        return "", f"{name}: missing reader ({exc.name}); pip install {exc.name}"
+    except Exception as exc:
+        return "", f"{name}: unreadable ({type(exc).__name__})"
+
+    return "", f"{name}: unsupported file type"
+
+
 def docs_from_uploads(files: list[dict]) -> tuple[dict[str, str], list[str]]:
     """Turn uploaded files into {doc_id: text}, plus a list of complaints.
 
-    A .jsonl file is read as one {"id", "text"} object per line; anything
-    else is treated as a whole document named after the file.
+    Each file arrives either as `text` (plain text the browser could read) or
+    as `b64` (a PDF or Word file, decoded and extracted here). A .jsonl file
+    is read as one {"id", "text"} object per line; anything else becomes one
+    document named after the file.
     """
     docs: dict[str, str] = {}
     problems: list[str] = []
 
     for f in files:
         name = str(f.get("name", "")).strip() or "untitled"
-        text = f.get("text", "")
+
+        if f.get("b64"):
+            text, problem = _decode_binary(name, str(f["b64"]))
+            if problem:
+                problems.append(problem)
+                continue
+        else:
+            text = f.get("text", "")
+
         if not isinstance(text, str) or not text.strip():
             problems.append(f"{name}: empty")
             continue
@@ -256,7 +335,7 @@ def docs_from_uploads(files: list[dict]) -> tuple[dict[str, str], list[str]]:
             continue
 
         stem = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-        for ext in (".txt", ".md", ".markdown", ".text"):
+        for ext in TEXT_EXTENSIONS + BINARY_EXTENSIONS:
             if stem.lower().endswith(ext):
                 stem = stem[: -len(ext)]
                 break

@@ -106,6 +106,107 @@ def test_missing_name_or_text_does_not_raise() -> None:
     assert isinstance(docs, dict) and isinstance(problems, list)
 
 
+# --- PDF and Word ----------------------------------------------------------
+
+def b64(data: bytes) -> str:
+    import base64
+    return base64.b64encode(data).decode("ascii")
+
+
+def make_pdf(lines: list[str]) -> bytes:
+    """A real PDF with a real text layer, built in memory."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    for line in lines:
+        page = doc.new_page()
+        page.insert_text((72, 96), line, fontsize=12)
+    return doc.tobytes()
+
+
+def make_docx(paragraphs: list[str], table: list[list[str]] | None = None) -> bytes:
+    from io import BytesIO
+    docx = pytest.importorskip("docx")
+    d = docx.Document()
+    for p in paragraphs:
+        d.add_paragraph(p)
+    if table:
+        t = d.add_table(rows=len(table), cols=len(table[0]))
+        for r, row in enumerate(table):
+            for c, val in enumerate(row):
+                t.cell(r, c).text = val
+    buf = BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
+def test_pdf_text_is_extracted() -> None:
+    data = make_pdf(["The bins go out on Tuesday night.",
+                     "The spare key is under the blue pot."])
+    docs, problems = docs_from_uploads([{"name": "house.pdf", "b64": b64(data)}])
+    assert problems == []
+    assert list(docs) == ["house"]
+    assert "Tuesday night" in docs["house"]
+    assert "blue pot" in docs["house"], "every page must be read, not just one"
+
+
+def test_pdf_with_no_text_layer_is_reported_not_silently_empty() -> None:
+    """A scanned PDF is page images with no text. Say so rather than
+    pretending the document was blank."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    doc.new_page()                               # a page with nothing on it
+    docs, problems = docs_from_uploads(
+        [{"name": "scan.pdf", "b64": b64(doc.tobytes())}])
+    assert docs == {}
+    assert any("scan.pdf" in p and "no text" in p for p in problems)
+
+
+def test_docx_paragraphs_are_extracted() -> None:
+    data = make_docx(["Returns are accepted for fourteen days.",
+                      "Damaged goods must be photographed."])
+    docs, problems = docs_from_uploads([{"name": "policy.docx", "b64": b64(data)}])
+    assert problems == []
+    assert "fourteen days" in docs["policy"]
+    assert "photographed" in docs["policy"]
+
+
+def test_docx_tables_are_extracted() -> None:
+    """Policy documents put the actual numbers in tables."""
+    data = make_docx(["Rates:"], table=[["Region", "Rate"], ["North", "45p"]])
+    docs, _ = docs_from_uploads([{"name": "rates.docx", "b64": b64(data)}])
+    assert "45p" in docs["rates"]
+
+
+def test_corrupt_binary_is_a_complaint_not_a_crash() -> None:
+    docs, problems = docs_from_uploads(
+        [{"name": "broken.pdf", "b64": b64(b"this is not a pdf at all")}])
+    assert docs == {}
+    assert any("broken.pdf" in p for p in problems)
+
+
+def test_unsupported_binary_extension_is_rejected_clearly() -> None:
+    docs, problems = docs_from_uploads(
+        [{"name": "photo.png", "b64": b64(b"\x89PNG\r\n")}])
+    assert docs == {}
+    assert any("unsupported" in p for p in problems)
+
+
+def test_binary_and_text_files_mix_in_one_upload() -> None:
+    docs, problems = docs_from_uploads([
+        {"name": "notes.txt", "text": "plain text notes"},
+        {"name": "house.pdf", "b64": b64(make_pdf(["pdf contents here"]))},
+        {"name": "policy.docx", "b64": b64(make_docx(["word contents here"]))},
+    ])
+    assert problems == []
+    assert set(docs) == {"notes", "house", "policy"}
+
+
+def test_binary_extensions_are_stripped_from_ids() -> None:
+    docs, _ = docs_from_uploads([
+        {"name": "reports/Q3 Summary.PDF", "b64": b64(make_pdf(["x"]))}])
+    assert list(docs) == ["Q3 Summary"]
+
+
 # --- free-text search ------------------------------------------------------
 
 @pytest.fixture

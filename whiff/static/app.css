@@ -146,6 +146,7 @@ main {
 .upload button { width: 100%; }
 .upload.over { background: #232a33; outline: 2px dashed var(--v-absent_from_candidates); outline-offset: -6px; }
 .src { font-size: 11.5px; color: var(--ink-faint); margin: 9px 0 0; line-height: 1.45; }
+.hint { font-size: 11px; color: #5a616f; margin: 5px 0 0; }
 .src b { color: var(--ink-soft); font-weight: 600; }
 
 /* ------------------------------------------------------------------ ask */
