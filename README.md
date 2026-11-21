@@ -25,7 +25,7 @@ STAGE 3  minimal fix: chunk_size: 150 -> 300
          net queries gained: +0  (safe)
 ```
 
-> **Status: working.** All four stages run end to end, 100 tests pass, and
+> **Status: working.** All four stages run end to end, 121 tests pass, and
 > the tool has been run against SQuAD v1.1 dev with lexical, dense and
 > hybrid retrieval — see *Finding* below.
 
@@ -54,11 +54,28 @@ bucket's problem is the most common way to waste a day:
 pip install -r requirements.txt
 python data/make_sample.py            # generate the sample corpus
 
+python -m whiff.cli serve             # web interface, opens a browser
 python -m whiff.cli triage            # classify every query
 python -m whiff.cli explain q3        # full diagnosis for one query
 python -m whiff.cli headroom          # oracle bound over the config space
 python -m whiff.cli bench             # measure the embedding cache speedup
 ```
+
+### The web interface
+
+`serve` starts a local page at http://127.0.0.1:8008 where you can click a
+failing query and change the chunker, chunk size, overlap and `k` live.
+
+Its centrepiece is the **rank strip**: positions laid out left to right, the
+cutoff drawn as a hard line, and the expected document's marker wherever it
+actually landed. "Ranked 8, cutoff is 5" is the whole diagnosis in one
+glance, and it is why the page exists rather than being a prettier wrapper
+around the CLI output.
+
+It is standard library only - `http.server` and one page of HTML, CSS and
+JavaScript with no framework and no build step. A tool whose pitch is "runs
+offline with almost no dependencies" should not need a web stack to show its
+own output.
 
 Point it at your own data with `--corpus` and `--queries` (JSONL; see
 `data/`). Embedder options:
@@ -347,7 +364,7 @@ No retriever change rescues an answer the chunker already cut in half.
 ## Tests
 
 ```bash
-python -m pytest -q      # 100 tests, ~6s, no network
+python -m pytest -q      # 121 tests, ~5s, no network
 ```
 
 The invariants worth knowing are pinned: chunk offsets equal their source
@@ -394,11 +411,13 @@ whiff/pipeline.py        corpus, queries, IndexStore, Retriever
 whiff/triage.py          stage 1: which kind of failure
 whiff/localize.py        stage 2: where the answer lives, dilution check
 whiff/counterfactual.py  stage 3 and 4: minimal fix, regressions, headroom
-whiff/cli.py             triage | explain | headroom | bench
+whiff/cli.py             triage | explain | headroom | bench | serve
+whiff/web.py             stdlib web interface (JSON API + page)
+whiff/static/            index.html, app.css, app.js
 data/make_sample.py      regenerates the engineered sample corpus
 data/load_squad.py       SQuAD -> whiff JSONL
 scripts/finding.py       the single-change fix study
-tests/                   100 tests
+tests/                   121 tests
 ```
 
 ## License

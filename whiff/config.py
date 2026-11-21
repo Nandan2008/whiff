@@ -104,10 +104,24 @@ def enumerate_space(
     """
     space = space or DEFAULT_SPACE
     keys = sorted(space)
+
+    # Every axis must be able to hold its CURRENT value, or the baseline is
+    # not representable in its own search space: with chunk_size=400 and a
+    # grid of [150, 300, 600, 1200], every candidate differs in chunk_size,
+    # so a one-field `k` fix can never be found and the reported minimum
+    # overstates what actually changed.
+    grid = {}
+    for key in keys:
+        values = list(space[key])
+        current = getattr(baseline, key)
+        if current not in values:
+            values.insert(0, current)
+        grid[key] = values
+
     seen: set[RetrievalConfig] = set()
     out: list[RetrievalConfig] = []
 
-    for values in product(*(space[k] for k in keys)):
+    for values in product(*(grid[k] for k in keys)):
         cfg = baseline.with_(**dict(zip(keys, values)))
         if cfg in seen:
             continue

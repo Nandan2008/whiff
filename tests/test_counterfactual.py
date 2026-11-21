@@ -52,6 +52,19 @@ def test_requires_reembedding_only_for_chunk_or_model_changes() -> None:
     assert base.with_(embedder="st:x").requires_reembedding(base)
 
 
+def test_baseline_is_representable_even_when_off_the_grid() -> None:
+    """A baseline value missing from the space must be added back.
+
+    Otherwise every candidate differs in that field, a one-field fix on some
+    other axis becomes unreachable, and the reported minimum is wrong.
+    """
+    base = cfg(chunk_size=400, k=1)           # 400 is not in DEFAULT_SPACE
+    space = enumerate_space(base, max_changed_fields=1)
+    assert any(c.chunk_size == 400 and c.k != 1 for c in space), (
+        "a k-only change must exist alongside an off-grid chunk_size")
+    assert base in space
+
+
 def test_max_changed_fields_is_respected() -> None:
     base = cfg(k=5, chunk_size=150)
     for c in enumerate_space(base, max_changed_fields=1):

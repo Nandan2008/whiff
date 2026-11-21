@@ -1,0 +1,286 @@
+/* whiff — dark. A cool charcoal rather than black, and no single brand
+   accent: the five verdict hues are the palette, so colour always means
+   something. Sans for chrome, mono for every code identifier and number. */
+
+:root {
+  --bg:        #15171c;
+  --panel:     #1b1e25;
+  --raise:     #22262f;
+  --rule:      #2a2f3a;
+  --rule-soft: #22262e;
+
+  --ink:       #e6e9ef;
+  --ink-soft:  #9aa3b2;
+  --ink-faint: #6b7483;
+
+  --v-retrieved:              #5fbd7e;
+  --v-not_indexed:            #e0685d;
+  --v-span_fragmented:        #e0a33f;
+  --v-absent_from_candidates: #5aa9e6;
+  --v-below_cutoff:           #a98bea;
+  --v-dropped_in_packing:     #4fc2a0;
+
+  --ui: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --code: "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.6 var(--ui);
+}
+
+/* ---------------------------------------------------------------- top bar */
+
+.bar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+  padding: 13px 22px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 26px;
+  align-items: flex-end;
+}
+
+.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; }
+.mark { font-size: 24px; font-weight: 650; letter-spacing: -.02em; }
+.what { font-size: 14px; color: var(--ink-faint); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+
+.controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+.controls input,
+.controls select,
+button {
+  font: 14px var(--code);
+  color: var(--ink);
+  background: var(--raise);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+.controls input, .controls select { width: 96px; }
+
+button {
+  font-family: var(--ui);
+  font-size: 13.5px;
+  cursor: pointer;
+  padding: 7px 13px;
+}
+button:hover { border-color: var(--ink-faint); color: #fff; }
+
+:focus-visible {
+  outline: 2px solid var(--v-absent_from_candidates);
+  outline-offset: 2px;
+}
+
+/* ----------------------------------------------------------------- layout */
+
+main {
+  display: grid;
+  grid-template-columns: minmax(250px, 320px) 1fr;
+  align-items: start;
+  gap: 20px;
+  padding: 20px 22px;
+  max-width: 1380px;
+  margin: 0 auto;
+}
+
+/* ------------------------------------------------------------ query list */
+
+.queries {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow: hidden;
+  position: sticky;
+  top: 20px;
+}
+
+.tally {
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+.tally b { color: var(--ink); font-size: 14px; font-weight: 650; }
+
+.queries ul { list-style: none; margin: 0; padding: 0; max-height: 66vh; overflow-y: auto; }
+.queries li + li { border-top: 1px solid var(--rule-soft); }
+
+.qbtn {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 10px 14px 11px 12px;
+  border-left: 3px solid transparent;
+  display: block;
+  font-family: var(--ui);
+}
+.qbtn:hover { background: #20242c; }
+.qbtn[aria-current="true"] { background: #262b35; border-left-color: var(--ink); }
+
+.qhead { display: flex; align-items: center; gap: 8px; }
+.qid { font: 11.5px var(--code); color: var(--ink-faint); }
+.qtext { font-size: 13.5px; line-height: 1.4; margin-top: 3px; color: var(--ink); display: block; }
+
+.dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.verdict-name { font: 10.5px var(--code); color: var(--ink-faint); margin-left: auto; }
+
+/* --------------------------------------------------------------- detail */
+
+.detail { min-width: 0; }
+.placeholder { color: var(--ink-faint); padding: 38px 4px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+
+h2 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-faint);
+  margin: 0 0 14px;
+}
+
+.question { font-size: 20px; line-height: 1.35; margin: 0 0 6px; font-weight: 550; }
+.expected { font-size: 12.5px; color: var(--ink-faint); margin: 0 0 22px; }
+.expected code { font-family: var(--code); color: var(--ink-soft); }
+
+/* ------------------------------------------------------------ rank strip */
+/* The centrepiece: where the answer landed, against where the cutoff sits. */
+
+.strip { display: flex; gap: 3px; align-items: flex-end; flex-wrap: wrap; margin-top: 20px; }
+
+.cell {
+  width: 26px;
+  height: 30px;
+  border-radius: 4px;
+  background: #232832;
+  border: 1px solid #2d333f;
+  font: 11px/28px var(--code);
+  color: var(--ink-faint);
+  text-align: center;
+}
+.cell.inside { background: #2b313c; color: var(--ink-soft); }
+.cell.gold {
+  background: var(--hue);
+  border-color: var(--hue);
+  color: #12141a;
+  font-weight: 700;
+  transform-origin: bottom center;
+}
+.cell.ellipsis { border: 0; background: none; width: 18px; }
+
+.cutoff {
+  width: 0;
+  align-self: stretch;
+  border-left: 2px solid var(--ink-soft);
+  margin: 0 6px;
+  position: relative;
+}
+.cutoff::after {
+  content: attr(data-label);
+  position: absolute;
+  top: -17px; left: -2px;
+  font: 10.5px var(--code);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.strip-note { font-size: 14px; color: var(--ink-soft); margin: 16px 0 0; }
+
+.facts {
+  display: flex; flex-wrap: wrap; gap: 6px 20px;
+  font-size: 12.5px; color: var(--ink-faint);
+  margin-top: 10px;
+}
+.facts b { color: var(--ink-soft); font-weight: 600; font-family: var(--code); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .cell.gold { animation: land .34s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes land {
+    from { transform: translateY(-8px) scale(.84); opacity: 0; }
+    to   { transform: none; opacity: 1; }
+  }
+}
+
+/* -------------------------------------------------------------- verdicts */
+
+.verdict-line { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; }
+.verdict-code { font: 16px var(--code); font-weight: 700; }
+.blame { font-size: 15px; color: var(--ink-soft); margin: 0; }
+
+.notes { margin: 12px 0 0; padding: 0; list-style: none; }
+.notes li {
+  font-size: 13.5px; color: var(--ink-faint);
+  padding-left: 14px; position: relative; margin-top: 6px;
+}
+.notes li::before {
+  content: ""; position: absolute; left: 0; top: .64em;
+  width: 7px; height: 1px; background: var(--ink-faint);
+}
+
+/* ------------------------------------------------------------------ fix */
+
+.fix-change {
+  font: 17px var(--code);
+  background: var(--raise);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.fix-change .from { color: var(--ink-faint); text-decoration: line-through; }
+.fix-change .to { color: var(--v-retrieved); font-weight: 700; }
+
+.warn { color: var(--v-not_indexed); }
+.good { color: var(--v-retrieved); }
+
+/* -------------------------------------------------------------- results */
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; font-size: 11.5px; font-weight: 400;
+  color: var(--ink-faint); padding: 0 10px 8px 0;
+  border-bottom: 1px solid var(--rule);
+}
+td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+tr.is-gold td { background: #1d2a22; }
+td.num, th.num { font-family: var(--code); text-align: right; width: 1%; white-space: nowrap; }
+td.chunk { font-family: var(--code); font-size: 12px; white-space: nowrap; color: var(--ink-soft); }
+td.snippet { color: var(--ink-faint); line-height: 1.45; }
+.tag { font: 10.5px var(--code); color: var(--v-retrieved); }
+
+.error {
+  background: #2a1b1a; border: 1px solid #4d2c29; color: #e59a93;
+  border-radius: 8px; padding: 14px 16px; font-size: 14px;
+}
+
+/* ------------------------------------------------------------ responsive */
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; padding: 14px; gap: 14px; }
+  .queries { position: static; }
+  .queries ul { max-height: 280px; }
+  .bar { padding: 12px 14px; }
+  .panel { padding: 17px 15px; }
+  .controls input, .controls select { width: 84px; }
+}

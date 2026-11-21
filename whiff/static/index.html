@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>whiff — retrieval debugger</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand">
+    <span class="mark">whiff</span>
+    <span class="what">retrieval debugger</span>
+  </div>
+
+  <form id="config" class="controls" autocomplete="off">
+    <label>Chunker
+      <select name="chunker">
+        <option value="fixed">fixed</option>
+        <option value="recursive">recursive</option>
+        <option value="sentence">sentence</option>
+      </select>
+    </label>
+    <label>Chunk size
+      <input name="chunk_size" type="number" min="20" max="4000" step="10" value="150">
+    </label>
+    <label>Overlap
+      <input name="overlap" type="number" min="0" max="2000" step="5" value="0">
+    </label>
+    <label>Results (k)
+      <input name="k" type="number" min="1" max="100" value="5">
+    </label>
+    <button type="button" id="reset">Reset</button>
+  </form>
+</header>
+
+<main>
+  <aside class="queries" aria-label="Queries">
+    <div class="tally" id="tally">Loading…</div>
+    <ul id="query-list"></ul>
+  </aside>
+
+  <section class="detail" id="detail" aria-live="polite">
+    <p class="placeholder">Pick a query to see why it failed.</p>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

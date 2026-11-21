@@ -266,6 +266,16 @@ def cmd_bench(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    """Open the web interface. Configuration is set in the browser, so this
+    command deliberately takes no retrieval flags."""
+    from .web import serve
+
+    serve(args.corpus, args.queries, host=args.host, port=args.port,
+          open_browser=not args.no_open)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="whiff",
                                  description="debug why retrieval missed")
@@ -287,6 +297,15 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("bench", help="measure the embedding cache speedup")
     add_common(p)
     p.set_defaults(fn=cmd_bench)
+
+    p = sub.add_parser("serve", help="open the web interface")
+    p.add_argument("--corpus", default=str(DATA / "sample_corpus.jsonl"))
+    p.add_argument("--queries", default=str(DATA / "sample_queries.jsonl"))
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8008)
+    p.add_argument("--no-open", action="store_true",
+                   help="do not open a browser window")
+    p.set_defaults(fn=cmd_serve)
 
     args = ap.parse_args(argv)
     return int(args.fn(args))
